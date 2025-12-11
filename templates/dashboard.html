@@ -1,0 +1,728 @@
+<!DOCTYPE html>
+<html>
+<!--
+  ============================================================================
+  BENCHMARK DASHBOARD
+  ============================================================================
+  Interactive dashboard for visualizing filesystem benchmark results.
+  
+  DATA SOURCE: Fetches JSON from /api/benchmarks/{uuid}
+  
+  EXPECTED JSON STRUCTURE:
+  {
+    "system_info": { hostname, cpu_model, ram_gb, target_disk, ... },
+    "data": {
+      "benchmark_name": {
+        "filesystem_name": {
+          "metrics": { plot: {...}, table: {...} },
+          "monitoring": {
+            "docker_stats": { plot, table, series },
+            "iostat": { plot, table, series }
+          }
+        }
+      }
+    }
+  }
+  ============================================================================
+-->
+
+<head>
+  <title>Benchmark Dashboard</title>
+  <!-- Plotly.js for interactive charts -->
+  <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
+
+  <style>
+    /* ========== BASE STYLES ========== */
+    body {
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      margin: 0;
+      padding: 20px;
+      background-color: #f4f4f9;
+    }
+
+    h1 {
+      text-align: center;
+      color: #333;
+    }
+
+    /* ========== BENCHMARK SECTION CARD ========== */
+    .benchmark-section {
+      background: white;
+      margin-bottom: 40px;
+      padding: 20px;
+      border-radius: 8px;
+      box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+    }
+
+    .benchmark-title {
+      border-bottom: 2px solid #eee;
+      padding-bottom: 10px;
+      margin-bottom: 20px;
+      color: #444;
+    }
+
+    /* ========== CHART/TABLE TOGGLE BUTTONS ========== */
+    .controls {
+      display: flex;
+      justify-content: flex-end;
+      margin-bottom: 10px;
+    }
+
+    .toggle-btn {
+      padding: 5px 15px;
+      cursor: pointer;
+      border: 1px solid #ccc;
+      background: white;
+      font-size: 14px;
+      margin-left: -1px;
+    }
+
+    .toggle-btn.active {
+      background: #007bff;
+      color: white;
+      border-color: #007bff;
+    }
+
+    .toggle-btn:first-child {
+      border-top-left-radius: 4px;
+      border-bottom-left-radius: 4px;
+    }
+
+    .toggle-btn:last-child {
+      border-top-right-radius: 4px;
+      border-bottom-right-radius: 4px;
+    }
+
+    /* ========== LAYOUT: TWO-COLUMN CHARTS/TABLES ========== */
+    .charts-row,
+    .tables-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 20px;
+    }
+
+    .chart-col {
+      flex: 1;
+      min-width: 450px;
+    }
+
+    .chart-container {
+      width: 100%;
+      height: 500px;
+    }
+
+    /* ========== DATA TABLES ========== */
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 10px;
+      font-size: 13px;
+    }
+
+    th,
+    td {
+      padding: 8px;
+      text-align: left;
+      border-bottom: 1px solid #ddd;
+    }
+
+    th {
+      background-color: #f8f9fa;
+      font-weight: 600;
+    }
+
+    tr:hover {
+      background-color: #f1f1f1;
+    }
+
+    .metric-table-container {
+      overflow-x: auto;
+      flex: 1;
+    }
+
+    .hidden {
+      display: none !important;
+    }
+
+    /* ========== SYSTEM INFO CARDS ========== */
+    .system-info-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 20px;
+    }
+
+    .info-card {
+      background: #f8f9fa;
+      border-radius: 8px;
+      padding: 15px;
+      border-left: 4px solid #007bff;
+    }
+
+    .info-card.green {
+      border-left-color: #28a745;
+    }
+
+    .info-card.orange {
+      border-left-color: #fd7e14;
+    }
+
+    .info-card.purple {
+      border-left-color: #6f42c1;
+    }
+
+    .info-card h3 {
+      margin: 0 0 12px 0;
+      color: #333;
+      font-size: 14px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .info-card .info-row {
+      display: flex;
+      justify-content: space-between;
+      padding: 6px 0;
+      border-bottom: 1px solid #e9ecef;
+    }
+
+    .info-card .info-row:last-child {
+      border-bottom: none;
+    }
+
+    .info-card .info-label {
+      color: #6c757d;
+    }
+
+    .info-card .info-value {
+      font-weight: 600;
+      color: #333;
+    }
+
+    .loading {
+      text-align: center;
+      padding: 40px;
+      color: #666;
+    }
+  </style>
+</head>
+
+<body>
+  <h1>📊 Benchmark Comparison Report</h1>
+
+  <!-- Main content container - populated by JavaScript -->
+  <div id="content">
+    <div class="loading">Loading benchmark data...</div>
+  </div>
+
+  <script>
+    // ============================================================================
+    // CONFIGURATION
+    // ============================================================================
+
+    // Extract UUID from URL path (e.g., /benchmarks/abc123 -> abc123)
+    const uuid = window.location.pathname.split('/').pop();
+
+    // Color palette for filesystem comparison (each FS gets consistent color)
+    const colors = [
+      '#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd',
+      '#8c564b', '#e377c2', '#7f7f7f', '#bcbd22', '#17becf'
+    ];
+
+    // Get color for filesystem by index (cycles through palette)
+    function getFsColor(index) {
+      return colors[index % colors.length];
+    }
+
+    // ============================================================================
+    // DATA LOADING
+    // ============================================================================
+
+    /**
+     * Fetch benchmark data from API and render the report.
+     * Called on page load.
+     */
+    async function loadData() {
+      try {
+        const res = await fetch(`/api/benchmarks/${uuid}`);
+        if (!res.ok) throw new Error('Failed to fetch benchmark data');
+        const data = await res.json();
+        renderReport(data);
+      } catch (err) {
+        document.getElementById('content').innerHTML = `<div class="benchmark-section"><div class="alert" style="color: red;">Error: ${err.message}</div></div>`;
+      }
+    }
+
+    // ============================================================================
+    // MAIN RENDER FUNCTION
+    // ============================================================================
+
+    /**
+     * Render the complete benchmark report.
+     * @param {Object} reportData - Full JSON data from API
+     */
+    function renderReport(reportData) {
+      const container = document.getElementById('content');
+      container.innerHTML = '';
+
+      // 1. Render System Info section (if present)
+      if (reportData.system_info && Object.keys(reportData.system_info).length > 0) {
+        renderSystemInfo(container, reportData.system_info);
+      }
+
+      // 2. Render each benchmark section
+      const benchmarksData = reportData.data || {};
+      for (const [benchmark, fsData] of Object.entries(benchmarksData)) {
+        renderBenchmarkSection(container, benchmark, fsData);
+      }
+    }
+
+    // ============================================================================
+    // SYSTEM INFO SECTION
+    // ============================================================================
+
+    /**
+     * Render system information cards (Host, CPU, Disk, Timestamp).
+     * @param {HTMLElement} container - Parent element
+     * @param {Object} sysInfo - System info object
+     */
+    function renderSystemInfo(container, sysInfo) {
+      const disk = sysInfo.target_disk || {};
+      const section = document.createElement('div');
+      section.className = 'benchmark-section';
+      section.innerHTML = `
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <h2 class="benchmark-title" style="margin-bottom:0; border-bottom:none;">📊 System Information</h2>
+                </div>
+                <hr style="border: 0; border-top: 2px solid #eee; margin-top: 10px; margin-bottom: 20px;">
+                
+                <div class="system-info-grid">
+                    <!-- Host Info Card -->
+                    <div class="info-card">
+                        <h3>🖥️ Host Information</h3>
+                        <div class="info-row">
+                            <span class="info-label">Hostname</span>
+                            <span class="info-value">${sysInfo.hostname || 'N/A'}</span>
+                        </div>
+                        <div class="info-row">
+                            <span class="info-label">OS Distribution</span>
+                            <span class="info-value">${sysInfo.os_distro || 'N/A'}</span>
+                        </div>
+                        <div class="info-row">
+                            <span class="info-label">Kernel Version</span>
+                            <span class="info-value">${sysInfo.kernel_version || 'N/A'}</span>
+                        </div>
+                    </div>
+                    
+                    <!-- CPU & Memory Card -->
+                    <div class="info-card green">
+                        <h3>⚡ CPU & Memory</h3>
+                        <div class="info-row">
+                            <span class="info-label">CPU Model</span>
+                            <span class="info-value">${sysInfo.cpu_model || 'N/A'}</span>
+                        </div>
+                        <div class="info-row">
+                            <span class="info-label">CPU Cores</span>
+                            <span class="info-value">${sysInfo.cpu_cores_total || 'N/A'}</span>
+                        </div>
+                        <div class="info-row">
+                            <span class="info-label">RAM</span>
+                            <span class="info-value">${sysInfo.ram_gb ? sysInfo.ram_gb + ' GB' : 'N/A'}</span>
+                        </div>
+                    </div>
+                    
+                    <!-- Target Disk Card -->
+                    <div class="info-card orange">
+                        <h3>💾 Target Disk</h3>
+                        <div class="info-row">
+                            <span class="info-label">Path</span>
+                            <span class="info-value">${disk.path || 'N/A'}</span>
+                        </div>
+                        <div class="info-row">
+                            <span class="info-label">Size</span>
+                            <span class="info-value">${disk.size || 'N/A'}</span>
+                        </div>
+                        <div class="info-row">
+                            <span class="info-label">Type</span>
+                            <span class="info-value">${disk.rotational === 1 ? 'HDD (Rotational)' : disk.rotational === 0 ? 'SSD' : 'Unknown'}</span>
+                        </div>
+                        ${disk.model ? `<div class="info-row"><span class="info-label">Model</span><span class="info-value">${disk.model}</span></div>` : ''}
+                    </div>
+                    
+                    <!-- Benchmark Info Card -->
+                    <div class="info-card purple">
+                        <h3>📅 Benchmark Info</h3>
+                        <div class="info-row">
+                            <span class="info-label">Timestamp</span>
+                            <span class="info-value">${sysInfo.timestamp ? new Date(sysInfo.timestamp).toLocaleString() : 'N/A'}</span>
+                        </div>
+                    </div>
+                </div>
+            `;
+      container.appendChild(section);
+    }
+
+    // ============================================================================
+    // BENCHMARK SECTION
+    // ============================================================================
+
+    /**
+     * Render a single benchmark section with charts and tables.
+     * Each benchmark compares multiple filesystems.
+     * 
+     * @param {HTMLElement} container - Parent element
+     * @param {string} benchmark - Benchmark name (e.g., "fio-bench")
+     * @param {Object} fsData - Object with filesystem names as keys
+     */
+    function renderBenchmarkSection(container, benchmark, fsData) {
+      // Create safe ID for HTML elements
+      const benchId = benchmark.replace(/[^a-zA-Z0-9]/g, '_');
+      const fsNames = Object.keys(fsData).sort();
+
+      const section = document.createElement('div');
+      section.className = 'benchmark-section';
+      section.id = `benchmark-section-${benchId}`;
+      section.innerHTML = `
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <h2 class="benchmark-title" style="margin-bottom:0; border-bottom:none;">${benchmark}</h2>
+                    <div class="controls">
+                        <button class="toggle-btn active" onclick="setMode('${benchId}', 'chart')">Charts</button>
+                        <button class="toggle-btn" onclick="setMode('${benchId}', 'table')">Tables</button>
+                    </div>
+                </div>
+                <hr style="border: 0; border-top: 2px solid #eee; margin-top: 10px; margin-bottom: 20px;">
+                
+                <!-- CHART VIEW: Left = Benchmark Metrics, Right = Monitoring -->
+                <div id="view-chart-${benchId}" class="charts-row">
+                    <div class="chart-col">
+                        <h3 style="text-align:center; color:#666;">Benchmark Metrics</h3>
+                        <div id="chart-left-${benchId}" class="chart-container"></div>
+                    </div>
+                    <div class="chart-col">
+                        <h3 style="text-align:center; color:#666;">System Monitoring</h3>
+                        <div id="chart-right-${benchId}" class="chart-container"></div>
+                    </div>
+                </div>
+                
+                <!-- TABLE VIEW: Benchmark Summaries + Docker Stats + IOStat -->
+                <div id="view-table-${benchId}" class="tables-row hidden">
+                    <div class="metric-table-container">
+                        <h3 style="text-align:center; color:#666;">Benchmark Summaries</h3>
+                        <div id="table-left-${benchId}"></div>
+                    </div>
+                    <div class="metric-table-container" style="display: flex; flex-direction: column; gap: 20px;">
+                        <div>
+                            <h3 style="text-align:center; color:#666;">Docker Stats</h3>
+                            <div id="table-docker-${benchId}"></div>
+                        </div>
+                        <div>
+                            <h3 style="text-align:center; color:#666;">IOStat Metrics</h3>
+                            <div id="table-iostat-${benchId}"></div>
+                        </div>
+                    </div>
+                </div>
+            `;
+      container.appendChild(section);
+
+      // Render charts and tables for this benchmark
+      renderLeftChart(benchId, fsData, fsNames);
+      renderRightChart(benchId, fsData, fsNames);
+      renderTables(benchId, fsData, fsNames);
+    }
+
+    // ============================================================================
+    // LEFT CHART: BENCHMARK METRICS (Bar Chart)
+    // ============================================================================
+
+    /**
+     * Render bar chart comparing benchmark metrics across filesystems.
+     * Uses dropdown to switch between metrics (IOPS, bandwidth, latency, etc.)
+     * 
+     * @param {string} benchId - Sanitized benchmark ID
+     * @param {Object} fsData - Filesystem data
+     * @param {Array} fsNames - Sorted list of filesystem names
+     */
+    function renderLeftChart(benchId, fsData, fsNames) {
+      // Collect all available metrics from metrics.plot
+      const allMetrics = new Set();
+      fsNames.forEach(fs => {
+        if (fsData[fs].metrics && fsData[fs].metrics.plot) {
+          Object.keys(fsData[fs].metrics.plot).forEach(m => allMetrics.add(m));
+        }
+      });
+      const metricList = Array.from(allMetrics).sort();
+
+      if (metricList.length === 0) {
+        document.getElementById(`chart-left-${benchId}`).innerHTML = "<p style='text-align:center'>No benchmark scalar metrics found.</p>";
+        return;
+      }
+
+      // Create one trace per metric (only first visible initially)
+      const leftTraces = [];
+      const leftButtons = [];
+
+      metricList.forEach((metric, mIndex) => {
+        const yValues = fsNames.map(fs => {
+          const m = fsData[fs].metrics ? fsData[fs].metrics.plot : {};
+          return (m && m[metric] !== undefined) ? m[metric] : 0;
+        });
+
+        leftTraces.push({
+          x: fsNames,
+          y: yValues,
+          name: metric,
+          type: 'bar',
+          marker: { color: fsNames.map((_, i) => getFsColor(i)) },
+          visible: mIndex === 0  // Only first metric visible
+        });
+
+        // Create dropdown button for this metric
+        const visibility = new Array(metricList.length).fill(false);
+        visibility[mIndex] = true;
+
+        leftButtons.push({
+          method: 'update',
+          args: [
+            { 'visible': visibility },
+            { 'yaxis.autorange': true, 'yaxis.range': null }
+          ],
+          label: metric
+        });
+      });
+
+      const leftLayout = {
+        barmode: 'group',
+        margin: { t: 50 },
+        updatemenus: [{
+          type: 'dropdown',
+          direction: 'down',
+          x: 0.0,
+          y: 1.15,
+          xanchor: 'left',
+          yanchor: 'top',
+          pad: { 'r': 5, 't': 5 },
+          buttons: leftButtons,
+          showactive: true
+        }]
+      };
+      Plotly.newPlot(`chart-left-${benchId}`, leftTraces, leftLayout);
+    }
+
+    // ============================================================================
+    // RIGHT CHART: SYSTEM MONITORING (Time Series)
+    // ============================================================================
+
+    /**
+     * Render time-series chart for system monitoring data.
+     * Shows CPU, Memory, Disk I/O from Docker stats and iostat.
+     * Uses dropdown to switch between metric categories.
+     * 
+     * @param {string} benchId - Sanitized benchmark ID
+     * @param {Object} fsData - Filesystem data
+     * @param {Array} fsNames - Sorted list of filesystem names
+     */
+    function renderRightChart(benchId, fsData, fsNames) {
+      // Define monitoring metric categories with data paths
+      const categories = [
+        { id: 'cpu', label: 'Docker CPU %', path: ['monitoring', 'docker_stats', 'series', 'cpu_perc'] },
+        { id: 'mem', label: 'Docker Mem (MB)', path: ['monitoring', 'docker_stats', 'series', 'mem_usage_bytes'], scale: 1 / 1024 / 1024 },
+        { id: 'write', label: 'Disk Write (KB/s)', path: ['monitoring', 'iostat', 'series', 'vdb_write_kbps'] },
+        { id: 'read', label: 'Disk Read (KB/s)', path: ['monitoring', 'iostat', 'series', 'vdb_read_kbps'] },
+        { id: 'wait', label: 'CPU I/O Wait %', path: ['monitoring', 'iostat', 'series', 'cpu_iowait'] }
+      ];
+
+      const rightTraces = [];
+      const traceIndicesByCat = {};  // Track which traces belong to which category
+
+      // Create traces for each category and filesystem
+      categories.forEach((cat, catIndex) => {
+        traceIndicesByCat[catIndex] = [];
+        fsNames.forEach((fs, fsIndex) => {
+          // Navigate to series data using path
+          let seriesData = fsData[fs];
+          for (const p of cat.path) {
+            if (seriesData) seriesData = seriesData[p];
+          }
+
+          if (seriesData && Array.isArray(seriesData) && seriesData.length > 0) {
+            // Apply scale if defined (e.g., bytes to MB)
+            const yData = cat.scale ? seriesData.map(v => v * cat.scale) : seriesData;
+
+            // Use timestamp if available, otherwise use index
+            let xData = null;
+            if (cat.path[1] === 'iostat' && fsData[fs].monitoring && fsData[fs].monitoring.iostat && fsData[fs].monitoring.iostat.series && fsData[fs].monitoring.iostat.series.timestamp) {
+              xData = fsData[fs].monitoring.iostat.series.timestamp;
+            } else {
+              xData = yData.map((_, i) => i);
+            }
+
+            rightTraces.push({
+              x: xData,
+              y: yData,
+              name: fs,
+              type: 'scatter',
+              mode: 'lines',
+              line: { color: getFsColor(fsIndex) },
+              visible: catIndex === 0,  // Only first category visible
+              legendgroup: fs,
+              showlegend: catIndex === 0
+            });
+
+            traceIndicesByCat[catIndex].push(rightTraces.length - 1);
+          }
+        });
+      });
+
+      if (rightTraces.length === 0) {
+        document.getElementById(`chart-right-${benchId}`).innerHTML = "<p style='text-align:center'>No monitoring time-series data.</p>";
+        return;
+      }
+
+      // Create dropdown buttons for each category
+      const rightButtons = categories.map((cat, catIndex) => {
+        const visibility = new Array(rightTraces.length).fill(false);
+        const showLegendArr = new Array(rightTraces.length).fill(false);
+
+        traceIndicesByCat[catIndex].forEach(idx => {
+          visibility[idx] = true;
+          showLegendArr[idx] = true;
+        });
+
+        return {
+          method: 'restyle',
+          args: [{ 'visible': visibility, 'showlegend': showLegendArr }],
+          label: cat.label
+        };
+      });
+
+      const rightLayout = {
+        margin: { t: 60, b: 80 },
+        legend: {
+          orientation: 'h',
+          x: 0.5,
+          y: -0.2,
+          xanchor: 'center',
+          yanchor: 'top'
+        },
+        updatemenus: [{
+          type: 'dropdown',
+          direction: 'down',
+          x: 0.0,
+          y: 1.15,
+          xanchor: 'left',
+          yanchor: 'top',
+          pad: { 'r': 5, 't': 5 },
+          font: { size: 11 },
+          buttons: rightButtons,
+          showactive: true
+        }],
+        xaxis: { title: 'Seconds' },
+        yaxis: { title: 'Value' }
+      };
+
+      Plotly.newPlot(`chart-right-${benchId}`, rightTraces, rightLayout);
+    }
+
+    // ============================================================================
+    // DATA TABLES
+    // ============================================================================
+
+    /**
+     * Create an HTML table comparing metrics across filesystems.
+     * 
+     * @param {string} containerId - Target element ID
+     * @param {Array} fsNames - Filesystem names (columns)
+     * @param {Function} dataFunc - Function to get data object for each FS
+     */
+    function createTable(containerId, fsNames, dataFunc) {
+      let html = '<table><thead><tr><th>Metric</th>';
+      fsNames.forEach(fs => html += `<th>${fs}</th>`);
+      html += '</tr></thead><tbody>';
+
+      // Gather all metric keys from all filesystems
+      const allKeys = new Set();
+      fsNames.forEach(fs => {
+        const d = dataFunc(fs);
+        if (d) Object.keys(d).forEach(k => allKeys.add(k));
+      });
+
+      // Create row for each metric
+      Array.from(allKeys).sort().forEach(k => {
+        html += `<tr><td>${k}</td>`;
+        fsNames.forEach(fs => {
+          const d = dataFunc(fs);
+          let val = (d && d[k] !== undefined) ? d[k] : '-';
+          if (typeof val === 'number' && !Number.isInteger(val)) val = val.toFixed(2);
+          html += `<td>${val}</td>`;
+        });
+        html += '</tr>';
+      });
+
+      html += '</tbody></table>';
+      document.getElementById(containerId).innerHTML = html;
+    }
+
+    /**
+     * Render all tables for a benchmark section.
+     * Creates 3 tables: Benchmark Metrics, Docker Stats, IOStat.
+     */
+    function renderTables(benchId, fsData, fsNames) {
+      // Left Table: Combined benchmark metrics (plot + table data)
+      createTable(`table-left-${benchId}`, fsNames, (fs) => {
+        const m = fsData[fs].metrics || {};
+        return { ...(m.plot || {}), ...(m.table || {}) };
+      });
+
+      // Docker Table: Container resource usage
+      createTable(`table-docker-${benchId}`, fsNames, (fs) => {
+        const dockerStats = fsData[fs].monitoring && fsData[fs].monitoring.docker_stats ? fsData[fs].monitoring.docker_stats : {};
+        return { ...(dockerStats.plot || {}), ...(dockerStats.table || {}) };
+      });
+
+      // IOStat Table: Disk and CPU I/O metrics
+      createTable(`table-iostat-${benchId}`, fsNames, (fs) => {
+        const iostat = fsData[fs].monitoring && fsData[fs].monitoring.iostat ? fsData[fs].monitoring.iostat : {};
+        return { ...(iostat.plot || {}), ...(iostat.table || {}) };
+      });
+    }
+
+    // ============================================================================
+    // VIEW MODE TOGGLE
+    // ============================================================================
+
+    /**
+     * Switch between Chart and Table view for a benchmark section.
+     * 
+     * @param {string} benchId - Sanitized benchmark ID
+     * @param {string} mode - 'chart' or 'table'
+     */
+    function setMode(benchId, mode) {
+      const chartView = document.getElementById(`view-chart-${benchId}`);
+      const tableView = document.getElementById(`view-table-${benchId}`);
+      const section = document.getElementById(`benchmark-section-${benchId}`);
+      const buttons = section.querySelectorAll('.toggle-btn');
+
+      if (mode === 'chart') {
+        chartView.classList.remove('hidden');
+        tableView.classList.add('hidden');
+        buttons[0].classList.add('active');
+        buttons[1].classList.remove('active');
+        // Trigger resize to fix Plotly chart sizing
+        window.dispatchEvent(new Event('resize'));
+      } else {
+        chartView.classList.add('hidden');
+        tableView.classList.remove('hidden');
+        buttons[0].classList.remove('active');
+        buttons[1].classList.add('active');
+      }
+    }
+
+    // ============================================================================
+    // INITIALIZATION
+    // ============================================================================
+
+    // Load data when page is ready
+    loadData();
+  </script>
+</body>
+
+</html>
