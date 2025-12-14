@@ -51,7 +51,7 @@ Accepts `multipart/form-data`:
 - `file`: The `aggregated_report.json` file.
 - `config_file` (Optional): A zip archive of the configuration directory.
 
-Returns: `{ "link": "/benchmarks/{uuid}", "uuid": "{uuid}" }`
+Returns: `{ "link": "/benchmarks/{uuid}"}`
 
 ### View Dashboard
 `GET /benchmarks/{uuid}`
@@ -67,7 +67,6 @@ Returns the raw JSON data for the benchmark run.
 
 ## Deployment on Render.com
 
-This project includes a `render.yaml` for automatic deployment.
 1. Create a **Web Service** on Render.
 2. Connect your repository.
 3. Select "Python 3" runtime.
