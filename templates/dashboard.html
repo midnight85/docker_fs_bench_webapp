@@ -6,7 +6,7 @@
   ============================================================================
   Interactive dashboard for visualizing filesystem benchmark results.
   
-  DATA SOURCE: Fetches JSON from /api/benchmarks/{uuid}
+  DATA SOURCE: Fetches JSON from /api/results/{uuid}
   
   EXPECTED JSON STRUCTURE:
   {
@@ -217,7 +217,7 @@
     // CONFIGURATION
     // ============================================================================
 
-    // Extract UUID from URL path (e.g., /benchmarks/abc123 -> abc123)
+    // Extract UUID from URL path (e.g., /results/abc123 -> abc123)
     const uuid = window.location.pathname.split('/').pop();
 
     // Color palette for filesystem comparison (each FS gets consistent color)
@@ -241,7 +241,7 @@
      */
     async function loadData() {
       try {
-        const res = await fetch(`/api/benchmarks/${uuid}`);
+        const res = await fetch(`/api/results/${uuid}`);
         if (!res.ok) throw new Error('Failed to fetch benchmark data');
         const data = await res.json();
         renderReport(data);
@@ -291,7 +291,7 @@
       section.innerHTML = `
                 <div style="display: flex; justify-content: space-between; align-items: center;">
                     <h2 class="benchmark-title" style="margin-bottom:0; border-bottom:none;">System Information</h2>
-                    ${hasConfig ? `<a href="/api/benchmarks/${uuid}/config" class="toggle-btn" style="text-decoration:none; color:#333; background:#e9ecef;">📥 Get Config Files</a>` : ''}
+                    ${hasConfig ? `<a href="/api/results/${uuid}/config" class="toggle-btn" style="text-decoration:none; color:#333; background:#e9ecef;">📥 Get Config Files</a>` : ''}
                 </div>
                 <hr style="border: 0; border-top: 2px solid #eee; margin-top: 10px; margin-bottom: 20px;">
                 

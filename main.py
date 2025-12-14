@@ -22,7 +22,7 @@ os.makedirs(DATA_DIR, exist_ok=True)
 @app.get("/", response_class=RedirectResponse)
 async def root():
     """Redirect to latest benchmark."""
-    return RedirectResponse(url="/benchmarks/latest")
+    return RedirectResponse(url="/results/latest")
 
 
 @app.post("/api/upload")
@@ -76,12 +76,12 @@ async def upload_results(
 
     # Build full URL (using request is tricky if not passed, but we can simplify return)
     # We'll just return relative path or constructed ID
-    link = f"/benchmarks/{uuid}"
+    link = f"/results/{uuid}"
 
     return {"link": link, "uuid": uuid}
 
 
-@app.get("/benchmarks/{uuid}", response_class=HTMLResponse)
+@app.get("/results/{uuid}", response_class=HTMLResponse)
 async def view_benchmark(uuid: str):
     """Serve the dashboard HTML for viewing benchmark results."""
     dashboard_path = os.path.join(TEMPLATES_DIR, "dashboard.html")
@@ -92,7 +92,7 @@ async def view_benchmark(uuid: str):
         return HTMLResponse(f.read())
 
 
-@app.get("/api/benchmarks/{uuid}")
+@app.get("/api/results/{uuid}")
 async def get_benchmark_data(uuid: str):
     """Return benchmark JSON data for the given UUID."""
     filepath = os.path.join(DATA_DIR, f"{uuid}.json")
@@ -111,7 +111,7 @@ async def get_benchmark_data(uuid: str):
     return data
 
 
-@app.get("/api/benchmarks/{uuid}/config")
+@app.get("/api/results/{uuid}/config")
 async def get_benchmark_config(uuid: str):
     """Download the configuration ZIP for the given UUID."""
     filename = f"{uuid}_config.zip"

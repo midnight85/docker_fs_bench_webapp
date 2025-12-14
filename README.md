@@ -51,18 +51,18 @@ Accepts `multipart/form-data`:
 - `file`: The `aggregated_report.json` file.
 - `config_file` (Optional): A zip archive of the configuration directory.
 
-Returns: `{ "link": "/benchmarks/{uuid}"}`
+Returns: `{ "link": "/results/{uuid}"}`
 
 ### View Dashboard
-`GET /benchmarks/{uuid}`
+`GET /results/{uuid}`
 Returns the HTML dashboard for a specific run.
 
 ### Get Config
-`GET /api/benchmarks/{uuid}/config`
+`GET /api/results/{uuid}/config`
 Downloads the configuration ZIP file associated with the run.
 
 ### Get Raw Data
-`GET /api/benchmarks/{uuid}`
+`GET /api/results/{uuid}`
 Returns the raw JSON data for the benchmark run.
 
 ## Deployment on Render.com
