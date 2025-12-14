@@ -5,6 +5,7 @@ Receives aggregated benchmark results, stores them, and serves interactive visua
 from fastapi import FastAPI, Request, HTTPException, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from uuid import uuid4
+from typing import Optional
 import os
 import json
 
@@ -25,40 +26,63 @@ async def root():
 
 
 @app.post("/api/upload")
-async def upload_results(file: UploadFile, request: Request):
+async def upload_results(
+    file: Optional[UploadFile] = None,
+    config_file: Optional[UploadFile] = None,
+):
     """
-    Upload benchmark results JSON.
-    Returns a link to view the results.
+    Upload benchmark results.
+    Supports:
+    - Multipart upload with 'file' (JSON report) and optional 'config_file' (ZIP)
     """
     try:
+        # Handle report file
+        if not file:
+             raise HTTPException(status_code=400, detail="Missing report file")
+        
         contents = await file.read()
-        data = json.loads(contents)
-    except json.JSONDecodeError:
-        raise HTTPException(status_code=400, detail="Invalid JSON file")
+        try:
+            data = json.loads(contents)
+        except json.JSONDecodeError:
+             raise HTTPException(status_code=400, detail="Invalid JSON report file")
+            
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
     # Generate short UUID (last 12 characters)
-    run_id = str(uuid4())[-12:]
-    filepath = os.path.join(DATA_DIR, f"{run_id}.json")
+    uuid = str(uuid4())[-12:]
+    filepath = os.path.join(DATA_DIR, f"{uuid}.json")
 
     with open(filepath, "w") as f:
         json.dump(data, f, indent=2)
+
+    # Save config ZIP if provided
+    if config_file:
+        config_path = os.path.join(DATA_DIR, f"{uuid}_config.zip")
+        with open(config_path, "wb") as f:
+            f.write(await config_file.read())
 
     # Also save as latest
     latest_path = os.path.join(DATA_DIR, "latest.json")
     with open(latest_path, "w") as f:
         json.dump(data, f, indent=2)
+    
+    # If config exists, also save as latest_config.zip
+    if config_file:
+         latest_config_path = os.path.join(DATA_DIR, "latest_config.zip")
+         # We need to re-read or copy. Since we already wrote it to disk, let's copy
+         import shutil
+         shutil.copy2(os.path.join(DATA_DIR, f"{uuid}_config.zip"), latest_config_path)
 
-    # Build full URL
-    base_url = str(request.base_url).rstrip("/")
-    link = f"{base_url}/benchmarks/{run_id}"
+    # Build full URL (using request is tricky if not passed, but we can simplify return)
+    # We'll just return relative path or constructed ID
+    link = f"/benchmarks/{uuid}"
 
-    return {"link": link}
+    return {"link": link, "uuid": uuid}
 
 
-@app.get("/benchmarks/{run_id}", response_class=HTMLResponse)
-async def view_benchmark(run_id: str):
+@app.get("/benchmarks/{uuid}", response_class=HTMLResponse)
+async def view_benchmark(uuid: str):
     """Serve the dashboard HTML for viewing benchmark results."""
     dashboard_path = os.path.join(TEMPLATES_DIR, "dashboard.html")
     if not os.path.exists(dashboard_path):
@@ -68,16 +92,36 @@ async def view_benchmark(run_id: str):
         return HTMLResponse(f.read())
 
 
-@app.get("/api/benchmarks/{run_id}")
-async def get_benchmark_data(run_id: str):
-    """Return benchmark JSON data for the given run ID."""
-    filepath = os.path.join(DATA_DIR, f"{run_id}.json")
+@app.get("/api/benchmarks/{uuid}")
+async def get_benchmark_data(uuid: str):
+    """Return benchmark JSON data for the given UUID."""
+    filepath = os.path.join(DATA_DIR, f"{uuid}.json")
     
     if not os.path.exists(filepath):
         raise HTTPException(status_code=404, detail="Results not found")
     
     with open(filepath, "r") as f:
-        return json.load(f)
+        data = json.load(f)
+    
+    # Check if config exists and add a flag to the response
+    config_path = os.path.join(DATA_DIR, f"{uuid}_config.zip")
+    if os.path.exists(config_path):
+        data["has_config"] = True
+        
+    return data
+
+
+@app.get("/api/benchmarks/{uuid}/config")
+async def get_benchmark_config(uuid: str):
+    """Download the configuration ZIP for the given UUID."""
+    filename = f"{uuid}_config.zip"
+    filepath = os.path.join(DATA_DIR, filename)
+    
+    if not os.path.exists(filepath):
+        raise HTTPException(status_code=404, detail="Configuration not found")
+        
+    from fastapi.responses import FileResponse
+    return FileResponse(filepath, media_type="application/zip", filename=f"pma_config_{uuid}.zip")
 
 
 if __name__ == "__main__":

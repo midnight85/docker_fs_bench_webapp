@@ -18189,7 +18189,7 @@
         "monitoring": {
           "docker_stats": {
             "plot": {
-              "cpu_perc": 101.7,
+              "cpu_perc": 101.69,
               "mem_usage_bytes": 6077896.02,
               "block_read_bytes": 164000.0,
               "block_write_bytes": 10800000000.0,
@@ -18197,7 +18197,7 @@
               "net_tx_bytes": 34800.0
             },
             "table": {
-              "cpu_perc": 101.7,
+              "cpu_perc": 101.69,
               "mem_usage_bytes": 6077896.02,
               "block_read_bytes": 164000.0,
               "block_write_bytes": 10800000000.0,
